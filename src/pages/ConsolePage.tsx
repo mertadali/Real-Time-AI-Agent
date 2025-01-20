@@ -44,6 +44,8 @@ interface Coordinates {
   };
 }
 
+
+
 /**
  * Type for all event logs
  */
@@ -377,9 +379,10 @@ export function ConsolePage() {
     const client = clientRef.current;
 
     // Set instructions
-    client.updateSession({ instructions: instructions });
-    // Set transcription, otherwise we don't get user transcriptions back
-    client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
+    client.updateSession({ 
+      instructions: instructions,
+      input_audio_transcription: { model: 'whisper-1' }
+    });
 
     // Add tools
     client.addTool(
@@ -455,6 +458,53 @@ export function ConsolePage() {
       }
     );
 
+
+//******************************************************************************************** */
+
+
+
+    client.addTool(
+      {
+        name: 'check_product',
+        description: 'Checks the inventory status of a product.',
+        parameters: {
+          type: 'object',
+          properties: {
+            product_id: {
+              type: 'string',
+              description: 'The ID of the product to check (laptop, phone, headphones)',
+            },
+          },
+          required: ['product_id'],
+        },
+      },
+      async ({ product_id }: { product_id: string }) => {
+        const { productDatabase } = await import('../utils/conversation_config');
+        const productKey = product_id.toLowerCase() as keyof typeof productDatabase;
+        const product = productDatabase[productKey];
+        
+        if (!product) {
+          return { error: 'Product not found' };
+        }
+        
+        return {
+          name: product.name,
+          stock: product.stock,
+          price: product.price,
+          category: product.category
+        };
+      }
+    );
+
+
+    
+//******************************************************************************************** */
+
+
+
+
+
+
     // handle realtime events from client + server for event logging
     client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
       setRealtimeEvents((realtimeEvents) => {
@@ -499,6 +549,15 @@ export function ConsolePage() {
       client.reset();
     };
   }, []);
+
+
+
+
+
+
+
+
+
 
   /**
    * Render the application
