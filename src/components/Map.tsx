@@ -20,10 +20,11 @@ export function Map({
       <MapContainer
         center={center}
         zoom={11}
-        scrollWheelZoom={false}
-        zoomControl={false}
+        scrollWheelZoom={true}
+        zoomControl={true}
         attributionControl={false}
       >
+
         <ChangeView center={center} zoom={11} />
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <Marker position={center}>

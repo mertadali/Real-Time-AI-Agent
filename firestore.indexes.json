@@ -1,0 +1,12 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "taxis",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "orderNo", "order": "ASCENDING" }
+      ]
+    }
+  ]
+} 

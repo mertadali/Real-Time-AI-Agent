@@ -1,165 +1,206 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, where, DocumentData, deleteDoc, doc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, getDocs, query, where, DocumentData, deleteDoc, orderBy, serverTimestamp, updateDoc, doc, startAt, endAt } from 'firebase/firestore';
+import * as geofire from 'geofire-common';
 
 const firebaseConfig = {
-  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
-  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.REACT_APP_FIREBASE_APP_ID
+  apiKey: "AIzaSyC2JzUkl9OfZGpI8i97LgUGhbTWYya7dd0",
+  authDomain: "speechfirebase-63ede.firebaseapp.com",
+  projectId: "speechfirebase-63ede",
+  storageBucket: "speechfirebase-63ede.firebasestorage.app",
+  messagingSenderId: "380886220262",
+  appId: "1:380886220262:web:baf948b8bdeccf1ecbaa27"
 };
-
-// Check if all required environment variables are set
-if (!process.env.REACT_APP_FIREBASE_API_KEY || 
-    !process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || 
-    !process.env.REACT_APP_FIREBASE_PROJECT_ID) {
-  throw new Error('Missing required Firebase configuration. Please check your .env file.');
-}
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 
-// Product interface
-export interface Product {
+export interface Taxi {
+  driverName: string;
+  plateNumber: string;
+  lat: number;
+  lng: number;
+  geohash: string;
+  isAvailable: boolean;
+
+}
+
+export interface TaxiWithDistance extends Taxi {
   id: string;
-  name: string;
-  price: number;
-  stock: number;
-  category: string;
+  distance: number;
 }
 
-// Clean up duplicate products
-export async function cleanupDuplicateProducts(): Promise<void> {
+type GeoPoint = [number, number];
+
+// Taksi ekleme fonksiyonu
+export const addTaxi = async (taxi: Omit<Taxi, 'geohash'>) => {
   try {
-    const productsRef = collection(db, 'products');
-    const querySnapshot = await getDocs(productsRef);
+    const location: GeoPoint = [taxi.lat, taxi.lng];
+    const geohash = geofire.geohashForLocation(location);
     
-    // Create a map to store unique products by name
-    const uniqueProducts = new Map<string, {doc: DocumentData, id: string}>();
-    
-    // Iterate through all products
-    querySnapshot.docs.forEach(doc => {
-      const data = doc.data();
-      const name = data.name.toLowerCase();
-      
-      if (!uniqueProducts.has(name)) {
-        // If this is the first instance of the product, save it
-        uniqueProducts.set(name, {doc: data, id: doc.id});
-      } else {
-        // If this is a duplicate, delete it
-        deleteDoc(doc.ref);
-      }
+    const docRef = await addDoc(collection(db, 'taxis'), {
+      ...taxi,
+      geohash,
     });
     
-    console.log(`Cleaned up ${querySnapshot.size - uniqueProducts.size} duplicate products`);
-  } catch (error) {
-    console.error('Error cleaning up duplicates:', error);
-  }
-}
-
-// Check if product exists
-async function productExists(name: string): Promise<boolean> {
-  const productsRef = collection(db, 'products');
-  const q = query(productsRef, where("name", "==", name.toLowerCase()));
-  const querySnapshot = await getDocs(q);
-  return !querySnapshot.empty;
-}
-
-// Add a new product (with duplicate check)
-export async function addProduct(product: Omit<Product, 'id'>): Promise<string | null> {
-  try {
-    // Check if product already exists
-    const exists = await productExists(product.name);
-    if (exists) {
-      console.log(`Product "${product.name}" already exists`);
-      return null;
-    }
-
-    // If product doesn't exist, add it
-    const productsRef = collection(db, 'products');
-    const docRef = await addDoc(productsRef, {
-      ...product,
-      name: product.name.toLowerCase(), // Store names in lowercase for easier searching
-      category: product.category.toLowerCase() // Store categories in lowercase for consistency
-    });
-    console.log(`Added new product "${product.name}" with ID: ${docRef.id}`);
     return docRef.id;
   } catch (error) {
-    console.error('Error adding product:', error);
-    return null;
+    console.error('Taksi eklenirken hata:', error);
+    throw error;
   }
-}
+};
 
-// Get product by name (case insensitive)
-export async function getProductByName(name: string): Promise<Product | null> {
+// En yakın taksiyi bulma fonksiyonu
+export const findNearestTaxi = async (lat: number, lng: number): Promise<TaxiWithDistance | null> => {
   try {
-    const productsRef = collection(db, 'products');
-    const q = query(productsRef, where("name", "==", name.toLowerCase()));
-    const querySnapshot = await getDocs(q);
+    console.log('Searching for taxi at coordinates:', { lat, lng });
     
-    if (querySnapshot.empty) {
-      return null;
+    const center: GeoPoint = [lat, lng];
+    const radiusInM = 20 * 1000; // 50 km yarıçap
+
+    const bounds = geofire.geohashQueryBounds(center, radiusInM);
+    console.log('Geohash bounds:', bounds);
+    
+    const promises = [];
+
+    for (const b of bounds) {
+      // Sorguyu basitleştiriyoruz
+      const q = query(
+        collection(db, 'taxis'),
+        where('isAvailable', '==', true),
+        orderBy('geohash'),
+        startAt(b[0]),
+        endAt(b[1])
+      );
+      promises.push(getDocs(q));
     }
 
-    const doc = querySnapshot.docs[0];
-    return { id: doc.id, ...doc.data() } as Product;
-  } catch (error) {
-    console.error('Error getting product:', error);
+    const snapshots = await Promise.all(promises);
+    const matchingDocs: TaxiWithDistance[] = [];
+
+    for (const snap of snapshots) {
+      console.log('Found documents:', snap.size);
+      for (const doc of snap.docs) {
+        const taxiData = doc.data() as Taxi;
+        console.log('Processing taxi:', taxiData);
+        
+        const taxiLocation: GeoPoint = [taxiData.lat, taxiData.lng];
+        const distanceInM = geofire.distanceBetween(taxiLocation, center) * 1000;
+        
+        if (distanceInM <= radiusInM) {
+          const taxi = {
+            id: doc.id,
+            ...taxiData,
+            distance: distanceInM
+          };
+          matchingDocs.push(taxi);
+        }
+      }
+    }
+
+    console.log('Total matching taxis:', matchingDocs.length);
+
+    // Mesafeye göre sırala
+    matchingDocs.sort((a, b) => a.distance - b.distance);
+
+    if (matchingDocs.length > 0) {
+    const nearestTaxi = matchingDocs[0];
+    console.log('Selected nearest taxi:', nearestTaxi);
+    return nearestTaxi;
+    }
+
+    console.log('No available taxis found');
     return null;
-  }
-}
-
-// Get product by category
-export async function getProductsByCategory(category: string): Promise<Product[]> {
-  try {
-    const productsRef = collection(db, 'products');
-    const q = query(productsRef, where("category", "==", category.toLowerCase()));
-    const querySnapshot = await getDocs(q);
-    
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Product);
   } catch (error) {
-    console.error('Error getting products by category:', error);
-    return [];
+    console.error('Error in findNearestTaxi:', error);
+    throw error;
   }
-}
+};
 
-// Get all products
-export async function getAllProducts(): Promise<Product[]> {
+// Örnek taksileri ekleme fonksiyonu
+export const seedSampleTaxis = async () => {
+  // Önce koleksiyonu temizle
+  const snapshot = await getDocs(collection(db, 'taxis'));
+  await Promise.all(snapshot.docs.map(doc => deleteDoc(doc.ref)));
+    const taxis = [
+      {
+      // İzmir - Bornova
+      driverName: "Ahmet Yılmaz",
+      plateNumber: "35 ABC 123",
+      lat: 38.45684671460064,
+      lng: 27.209916728202966,
+      isAvailable: true
+      },
+      {
+        // İstanbul
+        driverName: "Cengiz",
+        plateNumber: "35 CNG 234",
+        lat: 41.0085,
+        lng: 28.9789,
+        isAvailable: true
+
+      },
+      {
+      // İzmir - Alsancak
+      driverName: "Mehmet Demir",
+      plateNumber: "35 XYZ 456",
+      lat: 38.43726435449817,
+      lng: 27.142925657899127,
+      isAvailable: true
+      },
+      {
+      // İzmir - Karşıyaka
+      driverName: "Ayşe Kaya",
+      plateNumber: "35 DEF 789",
+      lat: 38.46247895613027,
+      lng: 27.125330725392665,
+      isAvailable: true
+      },
+      {
+      // İzmir - Konak
+      driverName: "Mert Adalı",
+      plateNumber: "35 MRT 789",
+      lat: 38.41914583431978,
+      lng: 27.128935996772827,
+      isAvailable: true
+      },
+
+      {
+      // İstanbul - Taksim
+      driverName: "Atakan deneme",
+      plateNumber: "34 ATK 788",  // İstanbul plakası yaptım
+      lat: 41.0085,
+      lng: 28.9789,
+      isAvailable: true  // Müsait durumda
+      }
+    ];
+
   try {
-    const productsRef = collection(db, 'products');
-    const querySnapshot = await getDocs(productsRef);
-    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Product);
+    // Tüm taksileri ekle
+    for (const taxi of taxis) {
+      const geohash = geofire.geohashForLocation([taxi.lat, taxi.lng]);
+      await addDoc(collection(db, 'taxis'), {
+        ...taxi,
+        geohash,
+        createdAt: serverTimestamp()
+      });
+    }
+
+    console.log('Taksiler başarıyla eklendi');
+    return true;
   } catch (error) {
-    console.error('Error getting all products:', error);
-    return [];
+    console.error('Taksi ekleme hatası:', error);
+    throw error;
   }
-}
+};
 
-await addProduct({
-    name: "Laptop Pro X",
-    price: 500.99,
-    stock: 25,
-    category: "electronics"
-  });
-
-  await addProduct({
-    name: "Laptop Pro 1",
-    price: 1299.99,
-    stock: 35,
-    category: "electronics"
-  });
-
-  await addProduct({
-    name: "Laptop Pro 2",
-    price: 700.99,
-    stock: 45,
-    category: "electronics"
-  });
-
-  await addProduct({
-    name: "Laptop Pro 3",
-    price: 800.99,
-    stock: 55,
-    category: "electronics"
-  });
+// Taksi durumunu güncelleme fonksiyonu
+export const updateTaxiAvailability = async (taxiId: string, isAvailable: boolean) => {
+  try {
+    const taxiRef = doc(db, 'taxis', taxiId);
+    await updateDoc(taxiRef, { isAvailable });
+    return true;
+  } catch (error) {
+    console.error('Taksi durumu güncellenirken hata:', error);
+    throw error;
+  }
+};

@@ -277,4 +277,50 @@
       }
     }
   }
+  
+  
+  .location-status {
+    position: absolute;
+    top: 1rem;
+    right: 40rem;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    z-index: 1000;
+
+    .icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    &.loading {
+      background-color: #f5f5f5;
+      color: #666;
+      .icon {
+        animation: spin 1s linear infinite;
+      }
+    }
+
+    &.error {
+      background-color: #fee2e2;
+      color: #dc2626;
+    }
+
+    &.success {
+      background-color: #dcfce7;
+      color: #16a34a;
+    }
+  }
+  
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
 }

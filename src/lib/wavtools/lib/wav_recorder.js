@@ -264,7 +264,7 @@ export class WavRecorder {
    */
   async listDevices() {
     if (
-      !navigator.mediaDevices ||
+      !navigator.mediaDevices || 
       !('enumerateDevices' in navigator.mediaDevices)
     ) {
       throw new Error('Could not request user devices');

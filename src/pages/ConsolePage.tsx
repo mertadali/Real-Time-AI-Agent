@@ -1,13 +1,3 @@
-  /**
-   * Running a local relay server will allow you to hide your API key
-   * and run custom logic on the server
-   *
-   * Set the local relay server address to:
-   * REACT_APP_LOCAL_RELAY_SERVER_URL=http://localhost:8081
-   *
-   * This will also require you to set OPENAI_API_KEY= in a `.env` file
-   * You can run it with `npm run relay`, in parallel with `npm start`
-   */
   const LOCAL_RELAY_SERVER_URL: string =
     process.env.REACT_APP_LOCAL_RELAY_SERVER_URL || '';
 
@@ -19,21 +9,17 @@
   import { instructions } from '../utils/conversation_config.js';
   import { WavRenderer } from '../utils/wav_renderer';
 
-  import { X, Edit, Zap, ArrowUp, ArrowDown } from 'react-feather';
+  import { X, Edit, Zap, ArrowUp, ArrowDown, MapPin, AlertCircle } from 'react-feather';
   import { Button } from '../components/button/Button';
   import { Toggle } from '../components/toggle/Toggle';
   import { Map } from '../components/Map';
-
-  import { db } from '../utils/firebase';
-  import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
-
+  import { seedSampleTaxis, findNearestTaxi, updateTaxiAvailability, type TaxiWithDistance } from '../utils/firebase';
+  //import type { Product } from '../utils/firebase';
 
   import './ConsolePage.scss';
   import { isJsxOpeningLikeElement } from 'typescript';
 
-  /**
-   * Type for result from get_weather() function call
-   */
+ 
 
   interface Coordinates {
     lat: number;
@@ -64,14 +50,19 @@
      * Ask user for API Key
      * If we're using the local relay server, we don't need this
      */
-    const apiKey = LOCAL_RELAY_SERVER_URL
-      ? ''
-      : localStorage.getItem('tmp::voice_api_key') ||
-        prompt('OpenAI API Key') ||
-        '';
-    if (apiKey !== '') {
-      localStorage.setItem('tmp::voice_api_key', apiKey);
-    }
+    const getStoredApiKey = () => {
+      const storedKey = localStorage.getItem('tmp::voice_api_key');
+      if (storedKey) return storedKey;
+      
+      const newKey = prompt('OpenAI API Key');
+      if (newKey) {
+        localStorage.setItem('tmp::voice_api_key', newKey);
+        return newKey;
+      }
+      return '';
+    };
+
+    const apiKey = LOCAL_RELAY_SERVER_URL ? '' : getStoredApiKey();
 
     /**
      * Instantiate:
@@ -80,10 +71,10 @@
      * - RealtimeClient (API client)
      */
     const wavRecorderRef = useRef<WavRecorder>(
-      new WavRecorder({ sampleRate: 24000 })
+      new WavRecorder({ sampleRate: 21500 })
     );
     const wavStreamPlayerRef = useRef<WavStreamPlayer>(
-      new WavStreamPlayer({ sampleRate: 24000 })
+      new WavStreamPlayer({ sampleRate: 21500 })
     );
     const clientRef = useRef<RealtimeClient>(
       new RealtimeClient(
@@ -125,10 +116,16 @@
     const [isRecording, setIsRecording] = useState(false);
     const [memoryKv, setMemoryKv] = useState<{ [key: string]: any }>({});
     const [coords, setCoords] = useState<Coordinates | null>({
-      lat: 37.775593,
-      lng: -122.418137,
+      lat: 41.0082,
+      lng: 28.9784,
     });
     const [marker, setMarker] = useState<Coordinates | null>(null);
+    const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
+    const [isLocationPermissionGranted, setIsLocationPermissionGranted] = useState(false);
+    const [locationError, setLocationError] = useState<string | null>(null);
+    const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+    const [watchId, setWatchId] = useState<number | null>(null);
+    const [isResponding, setIsResponding] = useState(false);
 
     /**
      * Utility for formatting the timing of logs
@@ -155,11 +152,105 @@
      * When you click the API key
      */
     const resetAPIKey = useCallback(() => {
-      const apiKey = prompt('OpenAI API Key');
-      if (apiKey !== null) {
-        localStorage.clear();
-        localStorage.setItem('tmp::voice_api_key', apiKey);
+      const newKey = prompt('OpenAI API Key');
+      if (newKey) {
+        localStorage.setItem('tmp::voice_api_key', newKey);
         window.location.reload();
+      }
+    }, []);
+
+   
+
+    const handleLocationError = useCallback((error: GeolocationPositionError) => {
+      let errorMessage = "";
+      switch (error.code) {
+        case GeolocationPositionError.PERMISSION_DENIED:
+          errorMessage = "Konum izni reddedildi. Taksi çağırmak için konum izni vermeniz gerekiyor.";
+          setIsLocationPermissionGranted(false);
+
+          break;
+        case GeolocationPositionError.POSITION_UNAVAILABLE:
+          errorMessage = "Konum servisi kullanılamıyor. Lütfen konum servisinin açık olduğundan emin olun.";
+          // Konum servisinin kapalı olması izin durumunu etkilemez
+          break;
+        case GeolocationPositionError.TIMEOUT:
+          errorMessage = "Konum bilgisi alınamadı. Lütfen tekrar deneyin.";
+          // Zaman aşımı izin durumunu etkilemez, tekrar deneyebiliriz
+          break;
+      }
+      setLocationError(errorMessage);
+      setIsLoadingLocation(false);
+    }, []);
+
+
+
+    const getCurrentLocation = () => {
+      return new Promise<{lat: number, lng: number}>((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject("Tarayıcınız konum özelliğini desteklemiyor.");
+          return;
+        }
+
+        console.log('Getting current location...');
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const location = {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude
+            };
+            console.log('Location received:', location);
+            setUserLocation(location);
+            setCoords(location);  // Her zaman coords'u güncelle
+            //setIsLocationPermissionGranted(true);
+            //setLocationError(null);
+            resolve(location);
+          },
+          (error) => {
+            console.error('Location error:', error);
+            handleLocationError(error);
+            reject(error);
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+          }
+        );
+      });
+    };
+
+    /**
+     * Disconnect and reset conversation state
+     */
+    const disconnectConversation = useCallback(async () => {
+      try {
+        setIsResponding(false);
+        setIsConnected(false);
+        setRealtimeEvents([]);
+        setItems([]);
+        setMemoryKv({});
+        setCoords({
+          lat: 41.0082,
+          lng: 28.9784,
+        });
+        setMarker(null);
+
+        const client = clientRef.current;
+        if (client.isConnected()) {
+          client.disconnect();
+        }
+
+        const wavRecorder = wavRecorderRef.current;
+        if (wavRecorder) {
+          await wavRecorder.end();
+        }
+
+        const wavStreamPlayer = wavStreamPlayerRef.current;
+        if (wavStreamPlayer) {
+          await wavStreamPlayer.interrupt();
+        }
+      } catch (error) {
+        console.error('Bağlantı kesme hatası:', error);
       }
     }, []);
 
@@ -168,60 +259,41 @@
      * WavRecorder taks speech input, WavStreamPlayer output, client is API client
      */
     const connectConversation = useCallback(async () => {
-      const client = clientRef.current;
-      const wavRecorder = wavRecorderRef.current;
-      const wavStreamPlayer = wavStreamPlayerRef.current;
+      try {
+        const client = clientRef.current;
+        const wavRecorder = wavRecorderRef.current;
+        const wavStreamPlayer = wavStreamPlayerRef.current;
 
-      // Set state variables
-      startTimeRef.current = new Date().toISOString();
-      setIsConnected(true);
-      setRealtimeEvents([]);
-      setItems(client.conversation.getItems());
+        // Eğer zaten bağlıysa, önce bağlantıyı kes
+        if (client.isConnected()) {
+          await disconnectConversation();
+          // Bağlantının tamamen kapanması için kısa bir bekleme
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-      // Connect to microphone
-      await wavRecorder.begin();
+        setIsLoadingLocation(true);
+        await getCurrentLocation(); // İlk ve tek seferlik konum al
+        
+        startTimeRef.current = new Date().toISOString();
+        setIsConnected(true);
+        setRealtimeEvents([]);
+        setItems(client.conversation.getItems());
 
-      // Connect to audio output
-      await wavStreamPlayer.connect();
+        await wavRecorder.begin();
+        await wavStreamPlayer.connect();
+        await client.connect();
 
-      // Connect to realtime API
-      await client.connect();
-      client.sendUserMessageContent([
-        {
-          type: `input_text`,
-          text: `Hello!`,
-          // text: `For testing purposes, I want you to list ten car brands. Number each item, e.g. "one (or whatever number you are one): the item name".`
-        },
-      ]);
-
-      if (client.getTurnDetectionType() === 'server_vad') {
-        await wavRecorder.record((data) => client.appendInputAudio(data.mono));
+        if (client.getTurnDetectionType() === 'server_vad') {
+          await wavRecorder.record((data) => client.appendInputAudio(data.mono));
+        }
+      } catch (error) {
+        console.error('Bağlantı hatası:', error);
+        setIsConnected(false);
+        setIsLoadingLocation(false);
+        // Hata durumunda temizlik yap
+        await disconnectConversation();
       }
-    }, []);
-
-    /**
-     * Disconnect and reset conversation state
-     */
-    const disconnectConversation = useCallback(async () => {
-      setIsConnected(false);
-      setRealtimeEvents([]);
-      setItems([]);
-      setMemoryKv({});
-      setCoords({
-        lat: 37.775593,
-        lng: -122.418137,
-      });
-      setMarker(null);
-
-      const client = clientRef.current;
-      client.disconnect();
-
-      const wavRecorder = wavRecorderRef.current;
-      await wavRecorder.end();
-
-      const wavStreamPlayer = wavStreamPlayerRef.current;
-      await wavStreamPlayer.interrupt();
-    }, []);
+    }, [disconnectConversation, getCurrentLocation]);
 
     const deleteConversationItem = useCallback(async (id: string) => {
       const client = clientRef.current;
@@ -377,176 +449,89 @@
      * Set all of our instructions, tools, events and more
      */
     useEffect(() => {
-      // Get refs
       const wavStreamPlayer = wavStreamPlayerRef.current;
       const client = clientRef.current;
 
-      // Set instructions
-      client.updateSession({ 
-        instructions: instructions,
-        input_audio_transcription: { model: 'whisper-1' }
+      client.updateSession({
+        instructions,
+        input_audio_transcription: { model: 'whisper-1' },
+        tools: [
+          {
+            name: 'find_nearest_taxi',
+            description: 'En yakın taksiyi bulur',
+            parameters: {
+              type: 'object',
+              properties: {
+                lat: { type: 'number', default: coords?.lat },
+                lng: { type: 'number', default: coords?.lng }
+              },
+              required: ['lat', 'lng']
+            }
+          }
+        ]
       });
 
-      // Add tools
+      // Add findNearestTaxi tool
       client.addTool(
         {
-          name: 'set_memory',
-          description: 'Saves important data about the user into memory.',
-          parameters: {
-            type: 'object',
-            properties: {
-              key: {
-                type: 'string',
-                description:
-                  'The key of the memory value. Always use lowercase and underscores, no other characters.',
-              },
-              value: {
-                type: 'string',
-                description: 'Value can be anything represented as a string',
-              },
-            },
-            required: ['key', 'value'],
-          },
-        },
-        async ({ key, value }: { [key: string]: any }) => {
-          setMemoryKv((memoryKv) => {
-            const newKv = { ...memoryKv };
-            newKv[key] = value;
-            return newKv;
-          });
-          return { ok: true };
-        }
-      );
-
-
-
-      client.addTool(
-        {
-          name: 'get_weather',
-          description:
-            'Retrieves the weather for a given lat, lng coordinate pair. Specify a label for the location.',
+          name: 'find_nearest_taxi',
+          description: 'Finds the nearest available taxi based on user location',
           parameters: {
             type: 'object',
             properties: {
               lat: {
                 type: 'number',
-                description: 'Latitude',
+                description: 'User latitude'
               },
               lng: {
                 type: 'number',
-                description: 'Longitude',
-              },
-              location: {
-                type: 'string',
-                description: 'Name of the location',
-              },
+                description: 'User longitude'
+              }
             },
-            required: ['lat', 'lng', 'location'],
-          },
-        },
-        async ({ lat, lng, location }: { [key: string]: any }) => {
-          setMarker({ lat, lng, location });
-          setCoords({ lat, lng, location });
-          const result = await fetch(
-            `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,wind_speed_10m`
-          );
-          const json = await result.json();
-          const temperature = {
-            value: json.current.temperature_2m as number,
-            units: json.current_units.temperature_2m as string,
-          };
-          const wind_speed = {
-            value: json.current.wind_speed_10m as number,
-            units: json.current_units.wind_speed_10m as string,
-          };
-          setMarker({ lat, lng, location, temperature, wind_speed });
-          return json;
-        }
-      );
-
-
-  //******************************************************************************************** */
-
-
-  // Product interface tanımı
-  interface Product {
-    id: string;
-    name: string;
-    price: number;
-    stock: number;
-    category: string;
-  }
-
-  // ... existing code ...
-
-  client.addTool(
-    {
-      name: 'check_product',
-      description: 'Checks product information in the inventory. Can search by name, category, or list all products.',
-      parameters: {
-        type: 'object',
-        properties: {
-          search_type: {
-            type: 'string',
-            description: 'How to search for products: "name", "category", or "all"',
-            enum: ['name', 'category', 'all']
-          },
-          query: {
-            type: 'string',
-            description: 'The search query (product name or category). Not needed if search_type is "all".'
+            required: ['lat', 'lng']
           }
         },
-        required: ['search_type']
-      }
-    },
-    async ({ search_type, query }: { search_type: string, query?: string }) => {
-      try {
-        const { getProductByName, getProductsByCategory, getAllProducts } = await import('../utils/firebase');
-        
-        switch (search_type) {
-          case 'name':
-            if (!query) return { error: 'Product name is required for name search' };
-            const product = await getProductByName(query);
-            if (!product) return { error: 'Product not found' };
-            return product;
+        async ({ lat, lng }: { lat: number, lng: number }) => {
+          try {
+            const taxi = await findNearestTaxi(lat, lng);
+            if (!taxi) {
+              return { 
+                status: 'error',
+                message: 'No available taxis found'
+              };
+            }
+
+            // Mark taxi location on map
+            setMarker({ lat: taxi.lat, lng: taxi.lng });
             
-          case 'category':
-            if (!query) return { error: 'Category is required for category search' };
-            const products = await getProductsByCategory(query);
-            if (products.length === 0) return { error: 'No products found in this category' };
-            return products;
-            
-          case 'all':
-            const allProducts = await getAllProducts();
-            if (allProducts.length === 0) return { error: 'No products found in inventory' };
-            return allProducts;
-            
-          default:
-            return { error: 'Invalid search type' };
+            // Mark taxi as busy
+            await updateTaxiAvailability(taxi.id, false);
+
+            const distanceInKm = (taxi.distance / 1000).toFixed(1);
+            const estimatedMinutes = Math.ceil((taxi.distance / 1000) * (60 / 30));
+
+            return {
+              status: 'success',
+              taxi: {
+                driverName: taxi.driverName,
+                plateNumber: taxi.plateNumber,
+                distance: distanceInKm,
+                estimatedMinutes: estimatedMinutes,
+                location: {
+                  lat: taxi.lat,
+                  lng: taxi.lng
+                }
+              }
+            };
+          } catch (error) {
+            console.error('Error in find_nearest_taxi:', error);
+            return {
+              status: 'error',
+              message: 'Failed to find taxi'
+            };
+          }
         }
-      } catch (error) {
-        console.error('Error in check_product:', error);
-        return { error: 'Failed to fetch product information' };
-      }
-    }
-  );
-
-  // Clean up duplicate products on startup
-  (async () => {
-    const { cleanupDuplicateProducts } = await import('../utils/firebase');
-    await cleanupDuplicateProducts();
-  })();
-
-
-    
-
-      
-  //******************************************************************************************** */
-
-
-
-
-
+      );
 
       // handle realtime events from client + server for event logging
       client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
@@ -570,35 +555,30 @@
         }
       });
       client.on('conversation.updated', async ({ item, delta }: any) => {
-        const items = client.conversation.getItems();
+        // Sadece ses çıkışı varsa işle
         if (delta?.audio) {
           wavStreamPlayer.add16BitPCM(delta.audio, item.id);
         }
+        
+        // Ses dosyası tamamlandıysa kaydet
         if (item.status === 'completed' && item.formatted.audio?.length) {
-          const wavFile = await WavRecorder.decode(
-            item.formatted.audio,
-            24000,
-            24000
-          );
-          item.formatted.file = wavFile;
+            const wavFile = await WavRecorder.decode(
+              item.formatted.audio,
+              18000,
+              18000
+            );
+            item.formatted.file = wavFile;
         }
 
-
-        if (item.role === 'user' || item.role === 'assistant') {
-          const docData = {
-            role: item.role,
-            content: item.formatted.text || item.formatted.transcript || '',
-            timestamp: new Date().toISOString(),
-          };
-          await addDoc(collection(db, 'conversation'), {
-            data: JSON.stringify(docData),
-          });
+        // Asistan mesajlarını işle
+        if (item.role === 'assistant') {
+          await handleServerMessage(item);
         }
+
+        // Sadece son kullanıcı ve asistan mesajlarını tut
+        const items = client.conversation.getItems().slice(-2);
         setItems(items);
       });
-
-
-      
 
       setItems(client.conversation.getItems());
 
@@ -606,20 +586,145 @@
         // cleanup; resets to defaults
         client.reset();
       };
-    }, []);
-
-
-
-
-
-
-
-
-
+    }, [coords]);
 
     /**
      * Render the application
      */
+    const handleAddSampleTaxis = async () => {
+      await seedSampleTaxis();
+      alert('Örnek taksiler eklendi!');
+    };
+
+    
+
+    const handleServerMessage = useCallback(async (item: ItemType) => {
+      if (item.type === 'message' && item.role === 'assistant') {
+        // Eğer zaten yanıt veriyorsa, yeni yanıt oluşturmayı engelle
+        if (isResponding) {
+          console.log('Already responding, skipping new response');
+          return;
+        }
+
+        let content = '';
+        if (Array.isArray(item.content)) {
+          content = item.content.map(c => c.type === 'text' ? c.text : '').join(' ');
+        } else if (typeof item.content === 'string') {
+          content = item.content;
+        }
+
+        // Taksi ile ilgili anahtar kelimeleri kontrol et
+        const lowerContent = content.toLowerCase();
+        const taxiKeywords = ['taksi', 'araba', 'araç', 'şoför', 'yönlendir', 'çağır'];
+        const isTaxiRequest = taxiKeywords.some(keyword => lowerContent.includes(keyword));
+
+        if (isTaxiRequest) {
+          try {
+            setIsResponding(true); // Yanıt vermeye başlıyoruz
+            console.log('Taxi request detected');
+            
+            let location = userLocation;
+            
+            // Eğer konum yoksa, konum almayı dene
+            if (!location) {
+              console.log('No location, trying to get location...');
+              try {
+                location = await getCurrentLocation();
+              } catch (error) {
+                console.error('Failed to get location:', error);
+                item.content = [{ 
+                  type: 'text', 
+                  text: " Size en yakın taksiyi bulmam için konumunuza ihtiyacım var." 
+                }];
+                setIsResponding(false); // Yanıt vermeyi bitiriyoruz
+                return;
+              }
+            }
+
+            console.log('Using location for taxi search:', location);
+            
+            if (!location?.lat || !location?.lng) {
+              console.error('Location is missing or invalid:', location);
+              item.content = [{ 
+                type: 'text', 
+                text: "Konum bilgisi eksik veya geçersiz." 
+              }];
+              setIsResponding(false); // Yanıt vermeyi bitiriyoruz
+              return;
+            }
+
+            const nearestTaxi = await findNearestTaxi(location.lat, location.lng);
+            console.log('findNearestTaxi result:', nearestTaxi);
+          
+            if (nearestTaxi && nearestTaxi.isAvailable) {
+              await updateTaxiAvailability(nearestTaxi.id, false);
+              const distanceInKm = (nearestTaxi.distance / 1000).toFixed(1);
+              
+              // Sadece marker'ı güncelle, coords'u değiştirme
+              setMarker({ lat: nearestTaxi.lat, lng: nearestTaxi.lng });
+              
+              const estimatedMinutes = Math.ceil((nearestTaxi.distance / 1000) * (60 / 30));
+               
+              const response = `${nearestTaxi.driverName} adlı şoförümüz size yönlendirildi.\n\n` +
+                             `🚖 Araç Plakası: ${nearestTaxi.plateNumber}\n` +
+                             `📍 Mesafe: ${distanceInKm} km\n` +
+                             `⏱️ Tahmini Varış: ${estimatedMinutes} dakika\n\n` +
+                           `İyi yolculuklar! 🚕`;
+                
+              item.content = [{ type: 'text', text: response }];
+            } else {
+              item.content = [{ 
+                type: 'text', 
+                text: "Üzgünüm, şu anda yakınızda müsait taksi bulamadım." 
+              }];
+            }
+          } catch (error) {
+            console.error('Taksi arama hatası:', error);
+            item.content = [{ 
+              type: 'text', 
+              text: "Taksi arama sırasında bir hata oluştu." 
+            }];
+          } finally {
+            setIsResponding(false); // Her durumda yanıt vermeyi bitiriyoruz
+          }
+        }
+      }
+    }, [userLocation, getCurrentLocation, findNearestTaxi, updateTaxiAvailability, setMarker, isResponding]);
+    
+    
+
+    // Konum durumunu gösteren bileşen
+    const renderLocationStatus = () => {
+      if (isLoadingLocation) {
+        return (
+          <div className="location-status loading">
+            <MapPin className="icon" />
+            Konum alınıyor...
+          </div>
+        );
+      }
+
+      if (locationError) {
+        return (
+          <div className="location-status error">
+            <AlertCircle className="icon" />
+            {locationError}
+          </div>
+        );
+      }
+
+      if (isLocationPermissionGranted && userLocation) {
+        return (
+          <div className="location-status success">
+            <MapPin className="icon" />
+            Konum aktif
+          </div>
+        );
+      }
+
+      return null;
+    };
+
     return (
       <div data-component="ConsolePage">
         <div className="content-top">
@@ -638,6 +743,7 @@
               />
             )}
           </div>
+          {renderLocationStatus()}
         </div>
         <div className="content-main">
           <div className="content-logs">
@@ -782,7 +888,6 @@
             <div className="content-actions">
               <Toggle
                 defaultValue={false}
-                labels={['manual', 'vad']}
                 values={['none', 'server_vad']}
                 onChange={(_, value) => changeTurnEndType(value)}
               />
@@ -806,26 +911,18 @@
                   isConnected ? disconnectConversation : connectConversation
                 }
               />
+              <Button
+                label="Örnek Taksileri Ekle"
+                onClick={handleAddSampleTaxis}
+              />
+              <div className="spacer" />
             </div>
           </div>
+          
           <div className="content-right">
             <div className="content-block map">
-              <div className="content-block-title">get_weather()</div>
-              <div className="content-block-title bottom">
-                {marker?.location || 'not yet retrieved'}
-                {!!marker?.temperature && (
-                  <>
-                    <br />
-                    🌡️ {marker.temperature.value} {marker.temperature.units}
-                  </>
-                )}
-                {!!marker?.wind_speed && (
-                  <>
-                    {' '}
-                    🍃 {marker.wind_speed.value} {marker.wind_speed.units}
-                  </>
-                )}
-              </div>
+              
+           
               <div className="content-block-body full">
                 {coords && (
                   <Map
@@ -835,12 +932,7 @@
                 )}
               </div>
             </div>
-            <div className="content-block kv">
-              <div className="content-block-title">set_memory()</div>
-              <div className="content-block-body content-kv">
-                {JSON.stringify(memoryKv, null, 2)}
-              </div>
-            </div>
+           
           </div>
         </div>
       </div>
