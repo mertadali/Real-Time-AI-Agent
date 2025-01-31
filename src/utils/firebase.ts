@@ -3,13 +3,15 @@ import { getFirestore, collection, addDoc, getDocs, query, where, DocumentData, 
 import * as geofire from 'geofire-common';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC2JzUkl9OfZGpI8i97LgUGhbTWYya7dd0",
-  authDomain: "speechfirebase-63ede.firebaseapp.com",
-  projectId: "speechfirebase-63ede",
-  storageBucket: "speechfirebase-63ede.firebasestorage.app",
-  messagingSenderId: "380886220262",
-  appId: "1:380886220262:web:baf948b8bdeccf1ecbaa27"
+  apiKey: "..",
+  authDomain: "..",
+  projectId: "..",
+  storageBucket: "..",
+  messagingSenderId: "..",
+
+  appId: "..",
 };
+
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
