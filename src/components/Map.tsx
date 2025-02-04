@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import './Map.scss';
 
 // API key'i environment variable'dan al
-const GOOGLE_MAPS_API_KEY = '';
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
 
 
 declare global {

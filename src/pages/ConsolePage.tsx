@@ -132,10 +132,11 @@ export function ConsolePage() {
   const [isRecording, setIsRecording] = useState(false);
   const [memoryKv, setMemoryKv] = useState<{ [key: string]: any }>({});
   const [coords, setCoords] = useState<Coordinates | null>({
-    lat: 38.45964078633599,
-    lng: 27.22885786575914,
+    lat: 38.4568367,
+    lng: 27.2443553,
   });
-  const [marker, setMarker] = useState<Coordinates | null>(null);
+
+  const [taxiMarker, setTaxiMarker] = useState<Coordinates | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   const [isLocationPermissionGranted, setIsLocationPermissionGranted] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -251,12 +252,13 @@ export function ConsolePage() {
       setItems([]);
       setMemoryKv({});
       setCoords({
-        
+       
+        lat: 38.4568367,
+        lng: 27.2443553,
 
-        lat: 38.45964078633599,
-        lng: 27.22885786575914,
+
       });
-      setMarker(null);
+      setTaxiMarker(null);
       setMapMarkers([]);
 
       const client = clientRef.current;
@@ -486,6 +488,8 @@ export function ConsolePage() {
 
 
 
+
+
   useEffect(() => {
     const wavStreamPlayer = wavStreamPlayerRef.current;
     const client = clientRef.current;
@@ -531,42 +535,64 @@ export function ConsolePage() {
         },
         async ({ lat, lng }: { lat: number, lng: number }) => {
         try {
-            const taxi = await findNearestTaxi(lat, lng);
-            if (!taxi) {
-              return { 
-                status: 'error',
-                message: 'No available taxis found'
-              };
-            }
-
-            // Mark taxi location on map
-            setMarker({ lat: taxi.lat, lng: taxi.lng });
-            
-            // Mark taxi as busy
-            await updateTaxiAvailability(taxi.id, false);
-
-            const distanceInKm = (taxi.distance / 1000).toFixed(1);
-            const estimatedMinutes = Math.ceil((taxi.distance / 1000) * (60 / 30));
-
-          return {
-            status: 'success',
-              taxi: {
-                driverName: taxi.driverName,
-                plateNumber: taxi.plateNumber,
-                distance: distanceInKm,
-                estimatedMinutes: estimatedMinutes,
-                location: {
-                  lat: taxi.lat,
-                  lng: taxi.lng
+            // Socket üzerinden taksi arama isteği gönder
+            return new Promise((resolve, reject) => {
+              socket.emit('search:direction', {
+                origin: `${lat},${lng}`,
+                destination: `${lat},${lng}` // Henüz varış noktası seçilmediği için aynı nokta
+              }, (response: any) => {
+                if (!response || !response.data || !response.data.availableTaxis) {
+                  resolve({
+                    status: 'error',
+                    message: 'No available taxis found'
+                  });
+                  return;
                 }
-              }
-          };
+                
+
+                // En kısa sürede gelebilecek taksiyi bul
+                const taxis = response.data.availableTaxis;
+                const nearestTaxi = taxis.reduce((nearest: any, current: any) => {
+                  if (!nearest || current.estimatedArrivalTime < nearest.estimatedArrivalTime) {
+                    return current;
+                  }
+                  return nearest;
+                }, null);
+
+                if (!nearestTaxi) {
+                  resolve({
+                    status: 'error',
+                    message: 'No available taxis found'
+                  });
+                  return;
+                }
+
+                // Taksi konumunu haritada göster
+                setTaxiMarker({ 
+                  lat: nearestTaxi.currentLocation.lat, 
+                  lng: nearestTaxi.currentLocation.lng 
+                });
+
+                resolve({
+                  status: 'success',
+                  taxi: {
+                    driverName: nearestTaxi.driverName,
+                    plateNumber: nearestTaxi.plateNumber,
+                    estimatedMinutes: Math.ceil(nearestTaxi.estimatedArrivalTime / 60),
+                    location: {
+                      lat: nearestTaxi.currentLocation.lat,
+                      lng: nearestTaxi.currentLocation.lng
+                    }
+                  }
+                });
+              });
+            });
         } catch (error) {
             console.error('Error in find_nearest_taxi:', error);
-          return {
-            status: 'error',
+            return {
+              status: 'error',
               message: 'Failed to find taxi'
-          };
+            };
         }
       }
     );
@@ -654,52 +680,93 @@ export function ConsolePage() {
       const taxiKeywords = ['taksi', 'araba', 'araç', 'şoför', 'yönlendir', 'çağır'];
       const isTaxiRequest = taxiKeywords.some(keyword => lowerContent.includes(keyword));
 
-      if (isTaxiRequest) {
+      if (isTaxiRequest && coords) {
         try {
           setIsResponding(true);
           console.log('[Assistant] Taksi talebi algılandı');
-          
-          let location = userLocation;
-          
-          if (!location) {
-            console.log('[Assistant] Konum bulunamadı, yeni konum alınıyor');
-            try {
-              location = await getCurrentLocation();
-            } catch (error) {
-              console.error('[Assistant] Konum alma hatası:', error);
+
+          // Socket üzerinden taksi arama
+          socket.emit('search:direction', {
+            origin: {
+              coordinates: {
+                lat: coords.lat,
+                lng: coords.lng
+              },
+              address: ''
+            },
+            destination: destination ? {
+              coordinates: {
+                lat: destination.lat,
+                lng: destination.lng
+              },
+              address: destination.address || ''
+            } : {
+              coordinates: {
+                lat: coords.lat,
+                lng: coords.lng
+              },
+              address: ''
+            },
+            requestTime: new Date().toISOString()
+          }, (response: any) => {
+            console.log('Socket Response:', response);
+            if (!response?.data?.availableTaxis?.length) {
               item.content = [{ 
                 type: 'text', 
-                text: "Size en yakın taksiyi bulmam için konumunuza ihtiyacım var. Lütfen konum izni verdiğinizden emin olun." 
+                text: "Üzgünüm, şu anda müsait taksi bulunamadı. Lütfen biraz sonra tekrar deneyin." 
               }];
               setIsResponding(false);
               return;
             }
-          }
 
-          if (!location?.lat || !location?.lng) {
-            console.error('[Assistant] Konum bilgisi eksik:', location);
-            item.content = [{ 
-              type: 'text', 
-              text: "Konum bilgisi eksik veya geçersiz. Lütfen tekrar deneyin." 
-            }];
+            // En yakın taksiyi bul (ilk taksi en yakın olanıdır)
+            const nearestTaxi = response.data.availableTaxis[0];
+            
+            // Taksi bilgilerini al
+            const estimatedMinutes = nearestTaxi.estimatedArrivalMinutes;
+            const driverName = nearestTaxi.driverName;
+            const plateNumber = nearestTaxi.plateNumber;
+
+            // Taksi konumunu haritada göster
+            if (nearestTaxi.currentLocation) {
+              setTaxiMarker({ 
+                lat: nearestTaxi.currentLocation.lat, 
+                lng: nearestTaxi.currentLocation.lng 
+              });
+            }
+
+            // Başlangıç konumunu haritada göster
+            setMapMarkers([{
+              position: { lat: coords.lat, lng: coords.lng },
+              title: 'Başlangıç Noktası'
+            }]);
+
+            // Kullanıcıya yanıt ver
+            if (!destination) {
+              // İlk istek için yanıt
+              item.content = [{ 
+                type: 'text', 
+                text: `Size en yakın taksi ${estimatedMinutes} dakika uzaklıkta. ${driverName} (${plateNumber}) size hizmet vermek için hazır. Nereye gitmek istiyorsunuz? Lütfen varış noktanızı haritada uzun basarak seçin.` 
+              }];
+            } else {
+              // Varış noktası seçildiğinde yanıt
+              item.content = [{ 
+                type: 'text', 
+                text: `${driverName} (${plateNumber}) ${estimatedMinutes} dakika içinde sizi almak için yola çıktı. Varış noktanız: ${destination.address}` 
+              }];
+
+              // Varış noktasını da haritada göster
+              setMapMarkers(prev => [
+                ...prev,
+                {
+                  position: { lat: destination.lat, lng: destination.lng },
+                  title: 'Varış Noktası'
+                }
+              ]);
+            }
+ 
             setIsResponding(false);
-            return;
-          }
-
-          const nearestTaxi = await findNearestTaxi(location.lat, location.lng);
-          console.log('findNearestTaxi result:', nearestTaxi);
-
-          // Kullanıcı konumunu haritada göster
-          setMapMarkers([{
-            position: { lat: location.lat, lng: location.lng },
-            title: 'Konumunuz'
-          }]);
-
-          // Kullanıcıya varış noktasını sormak için yanıt
-          item.content = [{ 
-            type: 'text', 
-            text: "Nereye gitmek istiyorsunuz? Lütfen varış noktanızı söyleyin." 
-          }];
+          });
 
         } catch (error) {
           console.error('[Assistant] Taksi arama hatası:', error);
@@ -707,12 +774,11 @@ export function ConsolePage() {
             type: 'text', 
             text: "Taksi arama sırasında bir hata oluştu. Lütfen tekrar deneyin." 
           }];
-        } finally {
           setIsResponding(false);
         }
       }
     }
-  }, [userLocation, getCurrentLocation, isResponding]);
+  }, [coords, destination, isResponding]);
   
     // ----------------------BURADAN BİTİYOR--------------------------------------
 
@@ -763,7 +829,7 @@ export function ConsolePage() {
           ...location,
           address: response.results[0].formatted_address
         };
-        setDestination(newDestination);
+        setDestination(newDestination);  
         
         // Varış noktası marker'ını ekle
         setMapMarkers(prev => [
@@ -782,7 +848,7 @@ export function ConsolePage() {
         });
       }
     } catch (error) {
-      console.error('Geocoding error:', error);
+      console.error('Geocoding error:', error); 
     }
   };
 
@@ -982,15 +1048,82 @@ export function ConsolePage() {
                 label="Test Socket"
                 buttonStyle="regular"
                 onClick={() => {
-                  if (!coords) return;
+                  if (!coords || !destination) {
+                    console.log('Test için gerekli veriler eksik:', {
+                      coords: coords ? 'mevcut' : 'eksik',
+                      destination: destination ? 'mevcut' : 'eksik'
+                    });
+                    return;
+                  }
+
+                  console.group('Socket Test Başlangıcı');
+                  console.log('Gönderilen İstek:', {
+                    origin: `${coords.lat},${coords.lng}`,
+                    destination: `${destination.lat},${destination.lng}`
+                  });
+
                   socket.emit('search:direction', {
                     origin: `${coords.lat},${coords.lng}`,
                     destination: `${destination.lat},${destination.lng}`
-                  }, (data: any) => {
-                    console.log(data.data.availableTaxis);
-                    console.log(data);
+                  }, (response: any) => {
+                    console.log('Socket Yanıtı:', response);
+                    
+                    try {
+                      // Yanıt ve data kontrolü
+                      if (!response) {
+                        console.error('Socket yanıtı boş geldi');
+                        return;
+                      }
 
+                      console.log('Tam Socket Yanıtı:', {
+                        response,
+                        data: response.data,
+                        taxis: response.data?.availableTaxis
+                      });
 
+                      // Taxis array kontrolü
+                      if (!response.data?.availableTaxis?.length) {
+                        console.log('Müsait taksi bulunamadı veya veri boş geldi');
+                        return;
+                      }
+
+                      const taxis = response.data.availableTaxis;
+                      console.log('Müsait Taksiler:', taxis);
+
+                      // İlk taksi verisinin kontrolü
+                      const nearestTaxi = taxis[0];
+                      if (!nearestTaxi) {
+                        console.error('En yakın taksi verisi alınamadı');
+                        return;
+                      }
+
+                      // Gerekli alanların varlığını kontrol et
+                      if (!nearestTaxi.driverName || !nearestTaxi.plateNumber) {
+                        console.error('Taksi verisi eksik:', nearestTaxi);
+                        return;
+                      }
+
+                      // Asistan yanıtını simüle et
+                      const simulatedAssistantResponse = {
+                        driverName: nearestTaxi.driverName || 'İsim Yok',
+                        plateNumber: nearestTaxi.plateNumber || 'Plaka Yok',
+                        estimatedMinutes: nearestTaxi.estimatedArrivalMinutes || 0,
+                        price: nearestTaxi.estimatedPrice || 0,
+                        distance: nearestTaxi.distanceToUser || 0,
+                        destinationAddress: destination.address || 'Adres bilgisi yok'
+                      };
+
+                      console.log('Asistan Yanıtı için Hazırlanan Veri:', simulatedAssistantResponse);
+                      
+                      // Asistanın oluşturacağı yanıt örneği
+                      const assistantMessage = `${simulatedAssistantResponse.driverName} (${simulatedAssistantResponse.plateNumber}) ${simulatedAssistantResponse.estimatedMinutes} dakika içinde sizi almak için yola çıkacak. Mesafe: ${simulatedAssistantResponse.distance}km, Tahmini Ücret: ${simulatedAssistantResponse.price}TL. Varış noktanız: ${simulatedAssistantResponse.destinationAddress}`;
+                      
+                      console.log('Asistanın Oluşturacağı Yanıt:', assistantMessage);
+                    } catch (error) {
+                      console.error('Socket yanıtı işlenirken hata oluştu:', error);
+                    } finally {
+                      console.groupEnd();
+                    }
                   });
                 }}
               />
