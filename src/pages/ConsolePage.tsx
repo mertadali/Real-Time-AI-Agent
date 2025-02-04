@@ -132,9 +132,10 @@ export function ConsolePage() {
   const [isRecording, setIsRecording] = useState(false);
   const [memoryKv, setMemoryKv] = useState<{ [key: string]: any }>({});
   const [coords, setCoords] = useState<Coordinates | null>({
-    lat: 38.4568367,
-    lng: 27.2443553,
+    lat: 38.4541440194039,
+    lng: 27.213252009050557,
   });
+
 
   const [taxiMarker, setTaxiMarker] = useState<Coordinates | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
@@ -253,8 +254,9 @@ export function ConsolePage() {
       setMemoryKv({});
       setCoords({
        
-        lat: 38.4568367,
-        lng: 27.2443553,
+        lat: 38.4541440194039,
+        lng: 27.213252009050557,
+
 
 
       });
@@ -709,63 +711,91 @@ export function ConsolePage() {
             },
             requestTime: new Date().toISOString()
           }, (response: any) => {
-            console.log('Socket Response:', response);
-            if (!response?.data?.availableTaxis?.length) {
-              item.content = [{ 
-                type: 'text', 
-                text: "Üzgünüm, şu anda müsait taksi bulunamadı. Lütfen biraz sonra tekrar deneyin." 
-              }];
-              setIsResponding(false);
-              return;
-            }
-
-            // En yakın taksiyi bul (ilk taksi en yakın olanıdır)
-            const nearestTaxi = response.data.availableTaxis[0];
+            console.group('Socket Test Detaylı İnceleme');
             
-            // Taksi bilgilerini al
-            const estimatedMinutes = nearestTaxi.estimatedArrivalMinutes;
-            const driverName = nearestTaxi.driverName;
-            const plateNumber = nearestTaxi.plateNumber;
+            // 1. Ham yanıtı göster
+            console.log('1. Ham Socket Yanıtı:', JSON.stringify(response, null, 2));
+            
+            // 2. Yanıt yapısını kontrol et
+            console.log('2. Yanıt Yapısı:', {
+              responseType: typeof response,
+              hasData: 'data' in (response || {}),
+              dataType: typeof response?.data,
+              availableTaxisExists: 'availableTaxis' in (response?.data || {}),
+              availableTaxisType: typeof response?.data?.availableTaxis
+            });
 
-            // Taksi konumunu haritada göster
-            if (nearestTaxi.currentLocation) {
-              setTaxiMarker({ 
-                lat: nearestTaxi.currentLocation.lat, 
-                lng: nearestTaxi.currentLocation.lng 
+            try {
+              // 3. Data içeriğini kontrol et
+              if (response?.data) {
+                console.log('3. Data İçeriği:', {
+                  keys: Object.keys(response.data),
+                  values: Object.values(response.data)
+                });
+              }
+
+              // 4. Taxis array yapısını kontrol et
+              if (response?.data?.availableTaxis) {
+                console.log('4. Taxis Array Yapısı:', {
+                  length: response.data.availableTaxis.length,
+                  firstTaxiKeys: response.data.availableTaxis[0] ? Object.keys(response.data.availableTaxis[0]) : 'boş',
+                  allTaxis: response.data.availableTaxis
+                });
+              }
+
+              // Eğer yanıt boşsa veya beklenen formatta değilse
+              if (!response?.data?.availableTaxis) {
+                console.log('5. Test Verisi Oluşturuluyor (Gerçek veri gelmedi)');
+                // Test verisi oluştur
+                response = {
+                  data: {
+                    availableTaxis: [{
+                      driverName: "Test Sürücü",
+                      plateNumber: "34 TEST 123",
+                      estimatedArrivalMinutes: 5,
+                      estimatedPrice: 100,
+                      distanceToUser: 2.5,
+                      currentLocation: {
+                        lat: coords.lat + 0.01,
+                        lng: coords.lng + 0.01
+                      }
+                    }]
+                  }
+                };
+                console.log('Test Verisi Oluşturuldu:', response);
+              }
+
+              const taxis = response.data.availableTaxis;
+              const nearestTaxi = taxis[0];
+
+              // Asistan yanıtını simüle et
+              const simulatedAssistantResponse = {
+                driverName: nearestTaxi.driverName || 'Test Sürücü',
+                plateNumber: nearestTaxi.plateNumber || '34 TEST 123',
+                estimatedMinutes: nearestTaxi.estimatedArrivalMinutes || 5,
+                price: typeof nearestTaxi.estimatedPrice === 'object' ? 
+                  nearestTaxi.estimatedPrice.amount || 100 : 
+                  nearestTaxi.estimatedPrice || 100,
+                distance: nearestTaxi.distanceToUser || 2.5,
+                destinationAddress: destination?.address || 'Test Adresi'
+              };
+
+              console.log('6. Simüle Edilen Asistan Yanıtı:', simulatedAssistantResponse);
+              
+              const assistantMessage = `${simulatedAssistantResponse.driverName} (${simulatedAssistantResponse.plateNumber}) ${simulatedAssistantResponse.estimatedMinutes} dakika içinde sizi almak için yola çıkacak. Mesafe: ${simulatedAssistantResponse.distance}km, Tahmini Ücret: ${simulatedAssistantResponse.price}₺. Varış noktanız: ${simulatedAssistantResponse.destinationAddress}`;
+              
+              console.log('7. Oluşturulan Asistan Mesajı:', assistantMessage);
+
+            } catch (error: any) {
+              console.error('8. Hata Oluştu:', error);
+              console.error('Hata Detayı:', {
+                name: error.name,
+                message: error.message,
+                stack: error.stack
               });
+            } finally {
+              console.groupEnd();
             }
-
-            // Başlangıç konumunu haritada göster
-            setMapMarkers([{
-              position: { lat: coords.lat, lng: coords.lng },
-              title: 'Başlangıç Noktası'
-            }]);
-
-            // Kullanıcıya yanıt ver
-            if (!destination) {
-              // İlk istek için yanıt
-              item.content = [{ 
-                type: 'text', 
-                text: `Size en yakın taksi ${estimatedMinutes} dakika uzaklıkta. ${driverName} (${plateNumber}) size hizmet vermek için hazır. Nereye gitmek istiyorsunuz? Lütfen varış noktanızı haritada uzun basarak seçin.` 
-              }];
-            } else {
-              // Varış noktası seçildiğinde yanıt
-              item.content = [{ 
-                type: 'text', 
-                text: `${driverName} (${plateNumber}) ${estimatedMinutes} dakika içinde sizi almak için yola çıktı. Varış noktanız: ${destination.address}` 
-              }];
-
-              // Varış noktasını da haritada göster
-              setMapMarkers(prev => [
-                ...prev,
-                {
-                  position: { lat: destination.lat, lng: destination.lng },
-                  title: 'Varış Noktası'
-                }
-              ]);
-            }
- 
-            setIsResponding(false);
           });
 
         } catch (error) {
@@ -1066,61 +1096,88 @@ export function ConsolePage() {
                     origin: `${coords.lat},${coords.lng}`,
                     destination: `${destination.lat},${destination.lng}`
                   }, (response: any) => {
-                    console.log('Socket Yanıtı:', response);
+                    console.group('Socket Test Detaylı İnceleme');
                     
+                    // 1. Ham yanıtı göster
+                    console.log('1. Ham Socket Yanıtı:', JSON.stringify(response, null, 2));
+                    
+                    // 2. Yanıt yapısını kontrol et
+                    console.log('2. Yanıt Yapısı:', {
+                      responseType: typeof response,
+                      hasData: 'data' in (response || {}),
+                      dataType: typeof response?.data,
+                      availableTaxisExists: 'availableTaxis' in (response?.data || {}),
+                      availableTaxisType: typeof response?.data?.availableTaxis
+                    });
+
                     try {
-                      // Yanıt ve data kontrolü
-                      if (!response) {
-                        console.error('Socket yanıtı boş geldi');
-                        return;
+                      // 3. Data içeriğini kontrol et
+                      if (response?.data) {
+                        console.log('3. Data İçeriği:', {
+                          keys: Object.keys(response.data),
+                          values: Object.values(response.data)
+                        });
                       }
 
-                      console.log('Tam Socket Yanıtı:', {
-                        response,
-                        data: response.data,
-                        taxis: response.data?.availableTaxis
-                      });
+                      // 4. Taxis array yapısını kontrol et
+                      if (response?.data?.availableTaxis) {
+                        console.log('4. Taxis Array Yapısı:', {
+                          length: response.data.availableTaxis.length,
+                          firstTaxiKeys: response.data.availableTaxis[0] ? Object.keys(response.data.availableTaxis[0]) : 'boş',
+                          allTaxis: response.data.availableTaxis
+                        });
+                      }
 
-                      // Taxis array kontrolü
-                      if (!response.data?.availableTaxis?.length) {
-                        console.log('Müsait taksi bulunamadı veya veri boş geldi');
-                        return;
+                      // Eğer yanıt boşsa veya beklenen formatta değilse
+                      if (!response?.data?.availableTaxis) {
+                        console.log('5. Test Verisi Oluşturuluyor (Gerçek veri gelmedi)');
+                        // Test verisi oluştur
+                        response = {
+                          data: {
+                            availableTaxis: [{
+                              driverName: "Test Sürücü",
+                              plateNumber: "34 TEST 123",
+                              estimatedArrivalMinutes: 5,
+                              estimatedPrice: 100,
+                              distanceToUser: 2.5,
+                              currentLocation: {
+                                lat: coords.lat + 0.01,
+                                lng: coords.lng + 0.01
+                              }
+                            }]
+                          }
+                        };
+                        console.log('Test Verisi Oluşturuldu:', response);
                       }
 
                       const taxis = response.data.availableTaxis;
-                      console.log('Müsait Taksiler:', taxis);
-
-                      // İlk taksi verisinin kontrolü
                       const nearestTaxi = taxis[0];
-                      if (!nearestTaxi) {
-                        console.error('En yakın taksi verisi alınamadı');
-                        return;
-                      }
-
-                      // Gerekli alanların varlığını kontrol et
-                      if (!nearestTaxi.driverName || !nearestTaxi.plateNumber) {
-                        console.error('Taksi verisi eksik:', nearestTaxi);
-                        return;
-                      }
 
                       // Asistan yanıtını simüle et
                       const simulatedAssistantResponse = {
-                        driverName: nearestTaxi.driverName || 'İsim Yok',
-                        plateNumber: nearestTaxi.plateNumber || 'Plaka Yok',
-                        estimatedMinutes: nearestTaxi.estimatedArrivalMinutes || 0,
-                        price: nearestTaxi.estimatedPrice || 0,
-                        distance: nearestTaxi.distanceToUser || 0,
-                        destinationAddress: destination.address || 'Adres bilgisi yok'
+                        driverName: nearestTaxi.driverName || 'Test Sürücü',
+                        plateNumber: nearestTaxi.plateNumber || '34 TEST 123',
+                        estimatedMinutes: nearestTaxi.estimatedArrivalMinutes || 5,
+                        price: typeof nearestTaxi.estimatedPrice === 'object' ? 
+                          nearestTaxi.estimatedPrice.amount || 100 : 
+                          nearestTaxi.estimatedPrice || 100,
+                        distance: nearestTaxi.distanceToUser || 2.5,
+                        destinationAddress: destination.address || 'Test Adresi'
                       };
 
-                      console.log('Asistan Yanıtı için Hazırlanan Veri:', simulatedAssistantResponse);
+                      console.log('6. Simüle Edilen Asistan Yanıtı:', simulatedAssistantResponse);
                       
-                      // Asistanın oluşturacağı yanıt örneği
-                      const assistantMessage = `${simulatedAssistantResponse.driverName} (${simulatedAssistantResponse.plateNumber}) ${simulatedAssistantResponse.estimatedMinutes} dakika içinde sizi almak için yola çıkacak. Mesafe: ${simulatedAssistantResponse.distance}km, Tahmini Ücret: ${simulatedAssistantResponse.price}TL. Varış noktanız: ${simulatedAssistantResponse.destinationAddress}`;
+                      const assistantMessage = `${simulatedAssistantResponse.driverName} (${simulatedAssistantResponse.plateNumber}) ${simulatedAssistantResponse.estimatedMinutes} dakika içinde sizi almak için yola çıkacak. Mesafe: ${simulatedAssistantResponse.distance}km, Tahmini Ücret: ${simulatedAssistantResponse.price}₺. Varış noktanız: ${simulatedAssistantResponse.destinationAddress}`;
                       
-                      console.log('Asistanın Oluşturacağı Yanıt:', assistantMessage);
-                    } catch (error) {
-                      console.error('Socket yanıtı işlenirken hata oluştu:', error);
+                      console.log('7. Oluşturulan Asistan Mesajı:', assistantMessage);
+
+                    } catch (error: any) {
+                      console.error('8. Hata Oluştu:', error);
+                      console.error('Hata Detayı:', {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack
+                      });
                     } finally {
                       console.groupEnd();
                     }
